@@ -23,9 +23,19 @@ public class Main {
        String line;
        while((line = reader.readLine()) != null) {
          System.out.println(line);
-         if (line.contains(" / ")) {
+         if (line.contains("GET") && line.contains(" / ")) {
            clientSocket.getOutputStream().write("HTTP/1.1 200 OK\r\n\r\n".getBytes());
-         } else {
+         } else if (line.contains("GET") && line.contains("echo")) {
+           int start = line.indexOf("/echo/") + "/echo/".length();
+           int end = line.indexOf(" ", start);
+           String body = line.substring(start, end);
+           clientSocket.getOutputStream().write(String.format(
+               "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+               body.length(),
+               body)
+               .getBytes());
+         }
+         else if (line.contains("GET")){
            clientSocket.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
          }
        }
