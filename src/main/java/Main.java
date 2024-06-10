@@ -3,7 +3,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Main {
   public static void main(String[] args) {
@@ -12,6 +13,8 @@ public class Main {
 
      ServerSocket serverSocket = null;
      Socket clientSocket = null;
+     Map<String, String> headers = new HashMap<>();
+     final String USER_AGENT = "User-Agent";
 
      try {
        serverSocket = new ServerSocket(4221);
@@ -33,6 +36,18 @@ public class Main {
                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
                body.length(),
                body)
+               .getBytes());
+         } else if (line.contains("GET") && line.toLowerCase().contains(USER_AGENT.toLowerCase())) {
+           // read headers into a map
+           while(!(line = reader.readLine()).equals("\r\n")) {
+             if(line.isEmpty()) break;
+             String[] tokens = line.split(": ");
+             headers.put(tokens[0].toLowerCase(), tokens[1]);
+           }
+           clientSocket.getOutputStream().write(String.format(
+                   "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+                   headers.get(USER_AGENT.toLowerCase()).length(),
+                   headers.get(USER_AGENT.toLowerCase()))
                .getBytes());
          }
          else if (line.contains("GET")){
