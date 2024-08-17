@@ -1,32 +1,29 @@
 import static java.util.Objects.requireNonNull;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.Socket;
+import java.nio.file.Files;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 
 public class ClientHandler implements Runnable {
-  private final String USER_AGENT = "User-Agent";
-  Socket clientSocket;
 
-  public ClientHandler(Socket clientSocket) {
+  Socket clientSocket;
+  String[] args;
+
+  public ClientHandler(String[] args, Socket clientSocket) {
+    this.args = args;
     this.clientSocket = clientSocket;
   }
 
   @Override
   public void run() {
-    // Map<String, String> headers = new HashMap<>();
-
-    // 1. handle /files endpoint, it should extract the file path after /files/
-    // 2. implement opening and reading file at path
-    // 3. if file exists, return 200 with the content of file in response body
-    // 4. if files does not exist, return 404
-
     try {
-      BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+      BufferedReader reader = new BufferedReader(
+          new InputStreamReader(clientSocket.getInputStream()));
       parseRequestLine(reader);
     } catch (IOException e) {
       System.out.println("IOException: " + e.getMessage());
@@ -37,59 +34,96 @@ public class ClientHandler implements Runnable {
 
     String[] tokens = reader.readLine().split(" ");
     String httpMethod = requireNonNull(tokens[0]);
-    String requestTarget = requireNonNull(tokens[1]);
+    String requestTarget = requireNonNull(tokens[1]).toLowerCase();
     String version = requireNonNull(tokens[2]);
 
     Map<String, String> headers = parseHeaders(reader);
 
-    switch(httpMethod) {
-      case "GET":
-        handleGet(requestTarget, version, headers);
-        return;
-      default:
-        clientSocket.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+    if (httpMethod.equals("GET")) {
+      handleGet(requestTarget, version, headers);
+    } else {
+      writeUnsuccessfulOutput();
     }
   }
 
   private Map<String, String> parseHeaders(BufferedReader reader) throws IOException {
     Map<String, String> headers = new HashMap<>();
     String header;
-    // read headers into a map
-    while(!(header = reader.readLine()).equals("\r\n")) {
-      if(header.isEmpty()) break;
+    while (!(header = reader.readLine()).equals("\r\n")) {
+      if (header.isEmpty()) {
+        break;
+      }
       String[] tokens = header.split(": ");
       headers.put(tokens[0].toLowerCase(), tokens[1]);
     }
-    clientSocket.getOutputStream().write(String.format(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-            headers.get(USER_AGENT.toLowerCase()).length(),
-            headers.get(USER_AGENT.toLowerCase()))
-        .getBytes());
     return headers;
   }
 
-  private void handleGet(String requestTarget, String version, Map<String, String> headers) throws IOException {
-    switch(requestTarget) {
-      case "/":
-        clientSocket.getOutputStream().write(String.format("%s 200 OK\r\n\r\n", version).getBytes());
-        return;
-      case "/echo/*":
-        String echoPhrase = requestTarget.substring("/echo/".length());
-        writeOutput(version, echoPhrase.length(), echoPhrase);
-      case "user-agent":
-        writeOutput(version,
-            headers.get(USER_AGENT.toLowerCase()).length(),
-            headers.get(USER_AGENT.toLowerCase())
-        );
+  private void handleGet(String requestTarget, String version, Map<String, String> headers)
+      throws IOException {
+    if (requestTarget.matches("/")) {
+      writeSuccessOutput(version);
+    } else if (requestTarget.matches("/echo/.*")) {
+      String echoPhrase = requestTarget.substring("/echo/".length());
+      writeSuccessOutput(version, echoPhrase.length(), ContentType.TEXT_PLAIN, echoPhrase);
+    } else if (requestTarget.matches("/user-agent")) {
+      final String USER_AGENT = "user-agent";
+      writeSuccessOutput(version,
+          headers.get(USER_AGENT).length(),
+          ContentType.TEXT_PLAIN,
+          headers.get(USER_AGENT)
+      );
+    } else if (requestTarget.matches("/files/.*")) {
+      String fileName = requestTarget.substring("/files/".length());
+      String directory = extractArg(args, "--directory");
+      File file = new File(requireNonNull(directory), fileName);
+
+      returnFileIfFound(file, version);
+    } else {
+      writeUnsuccessfulOutput();
     }
   }
 
-  private void writeOutput(String version, int contentLength, String body) throws IOException {
+  private void writeSuccessOutput(String version)
+      throws IOException {
+    clientSocket.getOutputStream().write(String.format("%s 200 OK\r\n\r\n", version).getBytes());
+  }
+
+  private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body)
+      throws IOException {
     clientSocket.getOutputStream().write(String.format(
-            "%s 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+            "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s",
             version,
+            contentType,
             contentLength,
             body)
         .getBytes());
+  }
+
+  private void writeUnsuccessfulOutput() throws IOException {
+    clientSocket.getOutputStream().write("HTTP/1.1 404 Not Found\r\n\r\n".getBytes());
+  }
+
+  private String extractArg(String[] args, String arg) {
+    for (int i = 0; i < args.length; i++) {
+      if (arg.equals(args[i]) && i + 1 < args.length) {
+        return args[i + 1];
+      }
+    }
+    return null;
+  }
+
+  private void returnFileIfFound(File file, String version) throws IOException {
+    if (file.exists()) {
+      byte[] fileContent = Files.readAllBytes(file.toPath());
+      writeSuccessOutput(version, fileContent.length, ContentType.APPLICATION_OCTET_STREAM, new String(fileContent));
+    } else {
+      writeUnsuccessfulOutput();
+    }
+  }
+
+  private static class ContentType {
+    static final String TEXT_PLAIN = "text/plain";
+    static final String APPLICATION_OCTET_STREAM = "application/octet-stream";
   }
 }

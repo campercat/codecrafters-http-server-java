@@ -9,8 +9,8 @@ public class Main {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     System.out.println("Logs from your program will appear here!");
 
-     ServerSocket serverSocket = null;
-     Socket clientSocket = null;
+   ServerSocket serverSocket = null;
+   Socket clientSocket = null;
 
      try {
        serverSocket = new ServerSocket(4221);
@@ -22,7 +22,7 @@ public class Main {
 
        while (true) {
          clientSocket = serverSocket.accept(); // Wait for connection from client.
-         executor.submit(new ClientHandler(clientSocket));
+         executor.submit(new ClientHandler(args, clientSocket));
        }
      } catch (IOException e) {
        System.out.println("IOException: " + e.getMessage());
