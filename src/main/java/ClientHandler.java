@@ -1,9 +1,10 @@
 import static java.util.Objects.requireNonNull;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.util.HashMap;
@@ -22,34 +23,48 @@ public class ClientHandler implements Runnable {
   @Override
   public void run() {
     try {
-      BufferedReader reader = new BufferedReader(
-          new InputStreamReader(clientSocket.getInputStream()));
-      parseRequestLine(reader);
+      parseRequest();
     } catch (IOException e) {
       System.out.println("IOException: " + e.getMessage());
     }
   }
 
-  private void parseRequestLine(BufferedReader reader) throws IOException {
+  private void parseRequest() throws IOException {
+    InputStream inputStream = clientSocket.getInputStream();
+    String[] tokens = readLine(inputStream).split(" ");
 
-    String[] tokens = reader.readLine().split(" ");
     String httpMethod = requireNonNull(tokens[0]);
     String requestTarget = requireNonNull(tokens[1]).toLowerCase();
     String version = requireNonNull(tokens[2]);
 
-    Map<String, String> headers = parseHeaders(reader);
+    Map<String, String> headers = parseHeaders(inputStream);
 
     if (httpMethod.equals("GET")) {
       handleGet(requestTarget, version, headers);
+    } else if (httpMethod.equals("POST")) {
+      handlePost(requestTarget, version, headers, inputStream);
     } else {
       writeUnsuccessfulOutput();
     }
   }
 
-  private Map<String, String> parseHeaders(BufferedReader reader) throws IOException {
+  private static String readLine(InputStream inputStream) throws IOException {
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    int prev = -1, curr;
+    while ((curr = inputStream.read()) != -1) {
+      buffer.write(curr);
+      if (prev == '\r' && curr == '\n') {
+        break;
+      }
+      prev = curr;
+    }
+    return buffer.toString("UTF-8").trim();
+  }
+
+  private Map<String, String> parseHeaders(InputStream inputStream) throws IOException {
     Map<String, String> headers = new HashMap<>();
     String header;
-    while (!(header = reader.readLine()).equals("\r\n")) {
+    while (!(header = readLine(inputStream)).equals("\r\n")) {
       if (header.isEmpty()) {
         break;
       }
@@ -57,6 +72,18 @@ public class ClientHandler implements Runnable {
       headers.put(tokens[0].toLowerCase(), tokens[1]);
     }
     return headers;
+  }
+
+  private void parseRequestBody(InputStream inputStream, Map<String, String> headers, String filename) {
+    String directoryPath = requireNonNull(extractArg(args, "--directory"));
+
+    File file = new File(directoryPath, filename);
+    try (FileOutputStream fileOutputStream = new FileOutputStream(file)) {
+      int len = Integer.parseInt(headers.get("content-length"));
+      fileOutputStream.write(inputStream.readNBytes(len));
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
   }
 
   private void handleGet(String requestTarget, String version, Map<String, String> headers)
@@ -74,11 +101,23 @@ public class ClientHandler implements Runnable {
           headers.get(USER_AGENT)
       );
     } else if (requestTarget.matches("/files/.*")) {
-      String fileName = requestTarget.substring("/files/".length());
+      String filename = requestTarget.substring("/files/".length());
       String directory = extractArg(args, "--directory");
-      File file = new File(requireNonNull(directory), fileName);
+      File file = new File(requireNonNull(directory), filename);
 
       returnFileIfFound(file, version);
+    } else {
+      writeUnsuccessfulOutput();
+    }
+  }
+
+  private void handlePost(String requestTarget, String version, Map<String, String> headers, InputStream inputStream)
+      throws IOException {
+    if (requestTarget.matches("/files/.*")) {
+      String filename = requestTarget.substring("/files/".length());
+      parseRequestBody(inputStream, headers, filename);
+      clientSocket.getOutputStream().write(String.format("%s 201 Created\r\n\r\n", version).getBytes());
+
     } else {
       writeUnsuccessfulOutput();
     }
