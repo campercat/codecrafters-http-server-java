@@ -88,6 +88,17 @@ public class ClientHandler implements Runnable {
 
   private void handleGet(String requestTarget, String version, Map<String, String> headers)
       throws IOException {
+    if (headers.containsKey("accept-encoding")) {
+      String acceptedEncodingSchemes = headers.get("accept-encoding");
+      if (acceptedEncodingSchemes.equals("gzip")) {
+        writeSuccessOutput(version, 0, ContentType.TEXT_PLAIN, "", "gzip");
+      } else {
+        writeSuccessOutput(version);
+      }
+      return;
+    }
+
+
     if (requestTarget.matches("/")) {
       writeSuccessOutput(version);
     } else if (requestTarget.matches("/echo/.*")) {
@@ -126,6 +137,18 @@ public class ClientHandler implements Runnable {
   private void writeSuccessOutput(String version)
       throws IOException {
     clientSocket.getOutputStream().write(String.format("%s 200 OK\r\n\r\n", version).getBytes());
+  }
+
+  private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body, String contentEncoding)
+      throws IOException {
+    clientSocket.getOutputStream().write(String.format(
+            "%s 200 OK\r\nContent-Type: %s\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n%s",
+            version,
+            contentType,
+            contentEncoding,
+            contentLength,
+            body)
+        .getBytes());
   }
 
   private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body)
