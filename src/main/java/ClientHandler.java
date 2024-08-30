@@ -88,21 +88,17 @@ public class ClientHandler implements Runnable {
 
   private void handleGet(String requestTarget, String version, Map<String, String> headers)
       throws IOException {
-    if (headers.containsKey("accept-encoding")) {
-      String acceptedEncodingSchemes = headers.get("accept-encoding");
-      if (acceptedEncodingSchemes.equals("gzip")) {
-        writeSuccessOutput(version, 0, ContentType.TEXT_PLAIN, "", "gzip");
-      } else {
-        writeSuccessOutput(version);
-      }
-      return;
-    }
-
-
     if (requestTarget.matches("/")) {
       writeSuccessOutput(version);
     } else if (requestTarget.matches("/echo/.*")) {
       String echoPhrase = requestTarget.substring("/echo/".length());
+      if (headers.containsKey("accept-encoding")) {
+        String acceptedEncodingSchemes = headers.get("accept-encoding");
+        if (acceptedEncodingSchemes.contains("gzip")) {
+          writeSuccessOutput(version, echoPhrase.length(), ContentType.TEXT_PLAIN, echoPhrase, "gzip");
+          return;
+        }
+      }
       writeSuccessOutput(version, echoPhrase.length(), ContentType.TEXT_PLAIN, echoPhrase);
     } else if (requestTarget.matches("/user-agent")) {
       final String USER_AGENT = "user-agent";
