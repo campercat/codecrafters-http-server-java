@@ -1,3 +1,5 @@
+package io.java;
+
 import static java.util.Objects.requireNonNull;
 
 import java.io.ByteArrayOutputStream;
@@ -8,15 +10,15 @@ import java.io.InputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.GZIPOutputStream;
 
 public class ClientHandler implements Runnable {
 
-  Socket clientSocket;
   String[] args;
+  Socket clientSocket;
+  RequestModel requestModel;
 
   public ClientHandler(String[] args, Socket clientSocket) {
     this.args = args;
@@ -26,14 +28,21 @@ public class ClientHandler implements Runnable {
   @Override
   public void run() {
     try {
-      parseRequest();
+      InputStream inputStream = clientSocket.getInputStream();
+      this.requestModel = parseRequest(inputStream);
+      if (requestModel.getHttpMethod().equals("GET")) {
+        handleGet();
+      } else if (requestModel.getHttpMethod().equals("POST")) {
+        handlePost(inputStream);
+      } else {
+        writeUnsuccessfulOutput();
+      }
     } catch (IOException e) {
       System.out.println("IOException: " + e.getMessage());
     }
   }
 
-  private void parseRequest() throws IOException {
-    InputStream inputStream = clientSocket.getInputStream();
+  private RequestModel parseRequest(InputStream inputStream) throws IOException {
     String[] tokens = readLine(inputStream).split(" ");
 
     String httpMethod = requireNonNull(tokens[0]);
@@ -42,26 +51,7 @@ public class ClientHandler implements Runnable {
 
     Map<String, String> headers = parseHeaders(inputStream);
 
-    if (httpMethod.equals("GET")) {
-      handleGet(requestTarget, version, headers);
-    } else if (httpMethod.equals("POST")) {
-      handlePost(requestTarget, version, headers, inputStream);
-    } else {
-      writeUnsuccessfulOutput();
-    }
-  }
-
-  private static String readLine(InputStream inputStream) throws IOException {
-    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-    int prev = -1, curr;
-    while ((curr = inputStream.read()) != -1) {
-      buffer.write(curr);
-      if (prev == '\r' && curr == '\n') {
-        break;
-      }
-      prev = curr;
-    }
-    return buffer.toString("UTF-8").trim();
+    return new RequestModel(httpMethod, requestTarget, version, headers);
   }
 
   private Map<String, String> parseHeaders(InputStream inputStream) throws IOException {
@@ -77,36 +67,46 @@ public class ClientHandler implements Runnable {
     return headers;
   }
 
-  private void parseRequestBody(InputStream inputStream, Map<String, String> headers, String filename) {
+  private static String readLine(InputStream inputStream) throws IOException {
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    int prev = -1, curr;
+    while ((curr = inputStream.read()) != -1) {
+      buffer.write(curr);
+      if (prev == '\r' && curr == '\n') {
+        break;
+      }
+      prev = curr;
+    }
+    return buffer.toString(StandardCharsets.UTF_8).trim();
+  }
+
+  private void parseRequestBody(InputStream inputStream, String filename) throws IOException {
     String directoryPath = requireNonNull(extractArg(args, "--directory"));
 
     File file = new File(directoryPath, filename);
     try (FileOutputStream fileOutputStream = new FileOutputStream(file)) {
-      int len = Integer.parseInt(headers.get("content-length"));
+      int len = Integer.parseInt(requestModel.getHeaders().get("content-length"));
       fileOutputStream.write(inputStream.readNBytes(len));
-    } catch (IOException e) {
-      e.printStackTrace();
     }
   }
 
-  private void handleGet(String requestTarget, String version, Map<String, String> headers)
+  private void handleGet()
       throws IOException {
+    String requestTarget = requestModel.getRequestTarget();
+    Map<String, String> headers = requestModel.getHeaders();
+
     if (requestTarget.matches("/")) {
-      writeSuccessOutput(version);
+      writeSuccessOutput();
     } else if (requestTarget.matches("/echo/.*")) {
       String echoPhrase = requestTarget.substring("/echo/".length());
-      if (headers.containsKey("accept-encoding")) {
-        String acceptedEncodingSchemes = headers.get("accept-encoding");
-        if (acceptedEncodingSchemes.contains("gzip")) {
-          byte[] compressedData = gzipCompress(echoPhrase);
-          writeSuccessOutput(version, compressedData.length, ContentType.TEXT_PLAIN, compressedData, "gzip");
-          return;
-        }
-      }
-      writeSuccessOutput(version, echoPhrase.length(), ContentType.TEXT_PLAIN, echoPhrase);
+      processRequestWithEncoding(echoPhrase);
+      writeSuccessOutput(
+          echoPhrase.length(),
+          ContentType.TEXT_PLAIN,
+          echoPhrase);
     } else if (requestTarget.matches("/user-agent")) {
       final String USER_AGENT = "user-agent";
-      writeSuccessOutput(version,
+      writeSuccessOutput(
           headers.get(USER_AGENT).length(),
           ContentType.TEXT_PLAIN,
           headers.get(USER_AGENT)
@@ -116,46 +116,64 @@ public class ClientHandler implements Runnable {
       String directory = extractArg(args, "--directory");
       File file = new File(requireNonNull(directory), filename);
 
-      returnFileIfFound(file, version);
+      returnFileIfFound(file);
     } else {
       writeUnsuccessfulOutput();
     }
   }
 
-  private void handlePost(String requestTarget, String version, Map<String, String> headers, InputStream inputStream)
+  private void handlePost(InputStream inputStream)
       throws IOException {
+    String requestTarget = requestModel.getRequestTarget();
+
     if (requestTarget.matches("/files/.*")) {
       String filename = requestTarget.substring("/files/".length());
-      parseRequestBody(inputStream, headers, filename);
-      clientSocket.getOutputStream().write(String.format("%s 201 Created\r\n\r\n", version).getBytes());
-
+      parseRequestBody(inputStream, filename);
+      clientSocket.getOutputStream()
+          .write(String.format("%s 201 Created\r\n\r\n", requestModel.getHttpVersion()).getBytes());
     } else {
       writeUnsuccessfulOutput();
     }
   }
 
-  private void writeSuccessOutput(String version)
-      throws IOException {
-    clientSocket.getOutputStream().write(String.format("%s 200 OK\r\n\r\n", version).getBytes());
+  private void processRequestWithEncoding(String echoPhrase) throws IOException {
+    Map<String, String> headers = requestModel.getHeaders();
+    if (headers.containsKey("accept-encoding")) {
+      String acceptedEncodingSchemes = headers.get("accept-encoding");
+      if (acceptedEncodingSchemes.contains("gzip")) {
+        byte[] compressedData = gzipCompress(echoPhrase);
+        writeSuccessOutput(ContentType.TEXT_PLAIN, "gzip", compressedData);
+      }
+    }
   }
 
-  private void writeSuccessOutput(String version, Integer contentLength, String contentType, byte[] body, String contentEncoding)
+  private void writeSuccessOutput()
+      throws IOException {
+    clientSocket.getOutputStream().write(String.format(
+            "%s 200 OK\r\n\r\n",
+            requestModel.getHttpVersion()
+        )
+        .getBytes());
+  }
+
+  private void writeSuccessOutput(String contentType, String contentEncoding, byte[] body)
       throws IOException {
     clientSocket.getOutputStream().write(String.format(
             "%s 200 OK\r\nContent-Type: %s\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n",
-            version,
+            requestModel.getHttpVersion(),
             contentType,
             contentEncoding,
-            contentLength)
+            body.length)
         .getBytes());
     clientSocket.getOutputStream().write(body);
   }
 
-  private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body)
+  private void writeSuccessOutput(Integer contentLength, String contentType,
+      String body)
       throws IOException {
     clientSocket.getOutputStream().write(String.format(
             "%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s",
-            version,
+            requestModel.getHttpVersion(),
             contentType,
             contentLength,
             body)
@@ -175,10 +193,11 @@ public class ClientHandler implements Runnable {
     return null;
   }
 
-  private void returnFileIfFound(File file, String version) throws IOException {
+  private void returnFileIfFound(File file) throws IOException {
     if (file.exists()) {
       byte[] fileContent = Files.readAllBytes(file.toPath());
-      writeSuccessOutput(version, fileContent.length, ContentType.APPLICATION_OCTET_STREAM, new String(fileContent));
+      writeSuccessOutput(fileContent.length, ContentType.APPLICATION_OCTET_STREAM,
+          new String(fileContent));
     } else {
       writeUnsuccessfulOutput();
     }
@@ -193,6 +212,7 @@ public class ClientHandler implements Runnable {
   }
 
   private static class ContentType {
+
     static final String TEXT_PLAIN = "text/plain";
     static final String APPLICATION_OCTET_STREAM = "application/octet-stream";
   }
