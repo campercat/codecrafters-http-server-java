@@ -6,9 +6,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 
 public class ClientHandler implements Runnable {
 
@@ -95,7 +98,8 @@ public class ClientHandler implements Runnable {
       if (headers.containsKey("accept-encoding")) {
         String acceptedEncodingSchemes = headers.get("accept-encoding");
         if (acceptedEncodingSchemes.contains("gzip")) {
-          writeSuccessOutput(version, echoPhrase.length(), ContentType.TEXT_PLAIN, echoPhrase, "gzip");
+          byte[] compressedData = gzipCompress(echoPhrase);
+          writeSuccessOutput(version, compressedData.length, ContentType.TEXT_PLAIN, compressedData, "gzip");
           return;
         }
       }
@@ -135,16 +139,16 @@ public class ClientHandler implements Runnable {
     clientSocket.getOutputStream().write(String.format("%s 200 OK\r\n\r\n", version).getBytes());
   }
 
-  private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body, String contentEncoding)
+  private void writeSuccessOutput(String version, Integer contentLength, String contentType, byte[] body, String contentEncoding)
       throws IOException {
     clientSocket.getOutputStream().write(String.format(
-            "%s 200 OK\r\nContent-Type: %s\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n%s",
+            "%s 200 OK\r\nContent-Type: %s\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n",
             version,
             contentType,
             contentEncoding,
-            contentLength,
-            body)
+            contentLength)
         .getBytes());
+    clientSocket.getOutputStream().write(body);
   }
 
   private void writeSuccessOutput(String version, Integer contentLength, String contentType, String body)
@@ -178,6 +182,14 @@ public class ClientHandler implements Runnable {
     } else {
       writeUnsuccessfulOutput();
     }
+  }
+
+  private byte[] gzipCompress(String data) throws IOException {
+    ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+    try (GZIPOutputStream gzipOutputStream = new GZIPOutputStream(byteArrayOutputStream)) {
+      gzipOutputStream.write(data.getBytes(StandardCharsets.UTF_8));
+    }
+    return byteArrayOutputStream.toByteArray();
   }
 
   private static class ContentType {
